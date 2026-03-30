@@ -315,14 +315,144 @@ The reviewer is always Claude Code CLI (`claude -p`) regardless of which coding 
 
 ## Files to Create
 
+### In the GitHub repo (what users clone/download)
 ```
-~/.local/bin/forge           # launcher script
-~/.local/bin/forge-review    # Claude review lint command
-~/.local/bin/forge-plan      # planning script
-~/.local/bin/forge-plan-answers  # answer Claude's questions
-~/.local/bin/forge-build     # build loop script
-~/.aider.conf.yml            # global aider config for Hercules
+install.sh                   # interactive installer
+scripts/forge                # launcher script
+scripts/forge-review         # review dispatcher (reads ~/.forge.env)
+scripts/forge-review-api     # API-based reviewer alternative
+scripts/forge-review-local   # local LLM reviewer alternative
+scripts/forge-plan           # planning script
+scripts/forge-plan-answers   # answer Claude's questions
+scripts/forge-build          # automated build loop (Python)
+templates/aider.conf.yml     # config template
+templates/forge.env          # reviewer config template
+README.md                    # concept, demo, setup instructions
 ```
+
+### Installed on user's machine (by install.sh)
+```
+~/.local/bin/forge           # launcher
+~/.local/bin/forge-review    # reviewer dispatcher
+~/.local/bin/forge-review-api    # API reviewer (optional)
+~/.local/bin/forge-review-local  # local reviewer (optional)
+~/.local/bin/forge-plan      # planner
+~/.local/bin/forge-plan-answers  # plan Q&A
+~/.local/bin/forge-build     # build automation
+~/.aider.conf.yml            # aider config (model + endpoint)
+~/.forge.env                 # reviewer config
+```
+
+## Installer (`forge-setup`)
+
+A single script users download and run after installing aider:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<repo>/main/install.sh | bash
+```
+
+Or clone and run:
+
+```bash
+git clone https://github.com/<repo>/forge-cli
+cd forge-cli
+./install.sh
+```
+
+### What `install.sh` does
+
+1. **Check dependencies**
+   - `aider --version` — fail with install instructions if missing
+   - `claude --version` — warn if missing, offer alternatives (API reviewer, local reviewer)
+   - `git --version` — fail if missing
+   - `curl` — needed for API reviewer fallback
+
+2. **Interactive setup** (5 questions)
+
+```
+Forge Setup
+───────────
+
+Coder model (the LLM that writes code):
+
+  1. Local LLM — Ollama (auto-detects running models)
+  2. Local LLM — LM Studio / llama.cpp (OpenAI-compatible endpoint)
+  3. API — Deepseek
+  4. API — OpenRouter (any model)
+  5. API — Anthropic (Claude Haiku/Sonnet)
+  6. Custom OpenAI-compatible endpoint
+
+Choice [1]: 2
+Endpoint URL [http://localhost:8080/v1]: http://localhost:8081/v1
+Model name [auto]: Qwen3-Coder-Next
+
+Reviewer (checks code after each edit):
+
+  1. Claude Code CLI (subscription — recommended)
+  2. Claude API (pay per token)
+  3. OpenAI API (GPT-4o)
+  4. Local LLM (same or different model)
+  5. None (skip review)
+
+Choice [1]: 1
+
+✓ Aider found (v0.86.2)
+✓ Claude Code found (v2.1.87)
+✓ Local LLM responding at http://localhost:8081/v1
+
+Installing scripts to ~/.local/bin/...
+  ✓ forge
+  ✓ forge-review
+  ✓ forge-plan
+  ✓ forge-plan-answers
+  ✓ forge-build
+Writing ~/.aider.conf.yml...
+  ✓ Config written
+
+Done. Type 'forge' in any git repo to start.
+```
+
+3. **Copy scripts** to `~/.local/bin/` with correct permissions
+4. **Write config** — `~/.aider.conf.yml` with chosen model/endpoint
+5. **Write `~/.forge.env`** — reviewer config
+
+### `~/.forge.env` (reviewer config)
+
+```bash
+# Reviewer command — receives filenames, exits 0 for approved
+FORGE_REVIEWER="claude -p"
+
+# For API reviewer (no Claude Code):
+# FORGE_REVIEWER="forge-review-api"
+# FORGE_REVIEWER_MODEL="gpt-4o"
+# FORGE_REVIEWER_API_KEY="sk-..."
+
+# For local LLM reviewer:
+# FORGE_REVIEWER="forge-review-local"
+# FORGE_REVIEWER_URL="http://localhost:11434/v1"
+# FORGE_REVIEWER_MODEL="llama3"
+
+# Max retries before escalation (0 = no retries)
+FORGE_MAX_RETRIES=2
+```
+
+The `forge-review` script reads `~/.forge.env` and routes to the right reviewer. Users change one file to switch reviewers — no script editing needed.
+
+### Reviewer alternatives (for users without Claude Code)
+
+**`forge-review-api`** — calls any OpenAI-compatible API for review:
+```bash
+#!/bin/bash
+# Uses FORGE_REVIEWER_MODEL and FORGE_REVIEWER_API_KEY from ~/.forge.env
+DIFF=$(git diff HEAD~1 -- "$@" 2>/dev/null)
+curl -s "$FORGE_REVIEWER_URL/chat/completions" \
+  -H "Authorization: Bearer $FORGE_REVIEWER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$FORGE_REVIEWER_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Review this diff. APPROVED or REJECTED with feedback.\n\n$DIFF\"}]}" \
+  | python3 -c "import sys,json; r=json.load(sys.stdin)['choices'][0]['message']['content']; print(r); sys.exit(0 if 'APPROVED' in r else 1)"
+```
+
+**`forge-review-local`** — same but hitting a local endpoint, no API key needed.
 
 ## Risks and Mitigations
 
