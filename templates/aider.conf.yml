@@ -1,0 +1,16 @@
+# Anvil — aider configuration
+# This file is written by install.sh. Edit to change defaults.
+# See: https://aider.chat/docs/config.html
+
+model: __MODEL__
+openai-api-base: __API_BASE__
+openai-api-key: __API_KEY__
+
+auto-lint: true
+lint-cmd: anvil-review
+
+no-analytics: true
+no-show-model-warnings: true
+no-show-release-notes: true
+
+map-tokens: 1024
