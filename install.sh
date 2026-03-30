@@ -156,7 +156,7 @@ echo ""
 echo "Installing scripts to ${BIN_DIR}/..."
 mkdir -p "$BIN_DIR"
 
-for script in anvil anvil-review anvil-review-api anvil-review-local anvil-plan anvil-plan-answers anvil-build; do
+for script in anvil anvil-review anvil-review-api anvil-review-local anvil-plan anvil-plan-answers anvil-build anvil-help; do
     if [ -f "${SCRIPT_DIR}/scripts/${script}" ]; then
         cp "${SCRIPT_DIR}/scripts/${script}" "${BIN_DIR}/${script}"
         chmod +x "${BIN_DIR}/${script}"

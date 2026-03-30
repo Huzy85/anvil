@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# anvil-help — show anvil commands
+# Run from within aider: /run anvil-help
+
+echo ""
+echo "  Anvil Commands"
+echo "  ─────────────────────────────────────────"
+echo ""
+echo "  Just type and chat — Hercules codes, Claude reviews each edit."
+echo ""
+echo "  /run anvil-plan           Send conversation to Claude for a task plan"
+echo "  /run anvil-plan-answers   Answer Claude's planning questions"
+echo "  /run anvil-build          Auto-feed plan tasks to Hercules one by one"
+echo "  /run anvil-help           This help message"
+echo ""
+echo "  Config files:"
+echo "    ~/.aider.conf.yml       Model and endpoint settings"
+echo "    ~/.anvil.env            Reviewer settings"
+echo ""

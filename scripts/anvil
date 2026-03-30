@@ -11,4 +11,15 @@ ANVIL_ENV="${HOME}/.anvil.env"
 # Prevent OpenBLAS thread explosion on machines running llama.cpp
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
 
+# Show banner unless --message or --yes flags suggest non-interactive use
+if [[ "$*" != *"--message"* ]] && [[ "$*" != *"--message-file"* ]]; then
+    echo ""
+    echo "  Anvil — Local LLM codes. Claude reviews."
+    echo "  ─────────────────────────────────────────"
+    echo "  /run anvil-plan     Claude plans your idea"
+    echo "  /run anvil-build    Auto-build from plan"
+    echo "  /run anvil-help     All commands"
+    echo ""
+fi
+
 exec aider "$@"
