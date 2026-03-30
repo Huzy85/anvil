@@ -115,7 +115,18 @@ def build_with_message_file(tasks):
 
         try:
             result = subprocess.run(
-                ["aider", "--message-file", msg_file, "--yes", "--no-analytics"],
+                [
+                    "aider",
+                    "--message-file", msg_file,
+                    "--yes-always",
+                    "--no-analytics",
+                    "--no-show-model-warnings",
+                    "--no-show-release-notes",
+                    "--no-check-update",
+                    "--no-browser",
+                    "--auto-lint",
+                    "--lint-cmd", "anvil-review",
+                ],
                 timeout=600,
             )
             if result.returncode == 0:
