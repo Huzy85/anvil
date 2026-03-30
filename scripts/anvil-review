@@ -13,9 +13,22 @@ MAX_DIFF_CHARS="${ANVIL_MAX_DIFF_CHARS:-40000}"
 FILES="$@"
 [ -z "$FILES" ] && exit 0
 
-# Get the diff for changed files — staged or last commit
-DIFF=$(git diff HEAD -- $FILES 2>/dev/null)
-[ -z "$DIFF" ] && DIFF=$(git diff HEAD~1 -- $FILES 2>/dev/null)
+# Build diff — handle tracked, staged, and new untracked files
+DIFF=""
+for f in $FILES; do
+    if git ls-files --error-unmatch "$f" &>/dev/null; then
+        # Tracked file — get diff vs HEAD
+        FILE_DIFF=$(git diff HEAD -- "$f" 2>/dev/null)
+        [ -z "$FILE_DIFF" ] && FILE_DIFF=$(git diff HEAD~1 -- "$f" 2>/dev/null)
+    else
+        # New untracked file — show full content as diff
+        FILE_DIFF="--- /dev/null
++++ b/$f
+$(sed 's/^/+/' "$f")"
+    fi
+    [ -n "$FILE_DIFF" ] && DIFF="${DIFF}${FILE_DIFF}\n"
+done
+
 [ -z "$DIFF" ] && exit 0
 
 # Truncate huge diffs
