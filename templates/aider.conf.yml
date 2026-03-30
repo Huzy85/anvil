@@ -12,5 +12,7 @@ lint-cmd: anvil-review
 no-analytics: true
 no-show-model-warnings: true
 no-show-release-notes: true
+no-check-update: true
+yes-always: true
 
 map-tokens: 1024
