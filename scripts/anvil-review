@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# anvil-review — aider --lint-cmd hook that sends diffs to a reviewer
+# Called by aider after every file edit. Exit 0 = approved, non-zero = rejected.
+
+set -uo pipefail
+
+ANVIL_ENV="${HOME}/.anvil.env"
+[ -f "$ANVIL_ENV" ] && source "$ANVIL_ENV"
+
+REVIEWER="${ANVIL_REVIEWER:-claude -p}"
+MAX_DIFF_CHARS="${ANVIL_MAX_DIFF_CHARS:-40000}"
+
+FILES="$@"
+[ -z "$FILES" ] && exit 0
+
+# Get the diff for changed files — staged or last commit
+DIFF=$(git diff HEAD -- $FILES 2>/dev/null)
+[ -z "$DIFF" ] && DIFF=$(git diff HEAD~1 -- $FILES 2>/dev/null)
+[ -z "$DIFF" ] && exit 0
+
+# Truncate huge diffs
+DIFF_LEN=${#DIFF}
+if [ "$DIFF_LEN" -gt "$MAX_DIFF_CHARS" ]; then
+    DIFF="${DIFF:0:$MAX_DIFF_CHARS}
+
+[diff truncated — ${DIFF_LEN} chars total, showing first ${MAX_DIFF_CHARS}]"
+fi
+
+PROMPT="Review this code change. Be concise. Focus on bugs, logic errors, and security issues. Ignore style.
+If the code is correct and complete: say APPROVED on its own line.
+If there are issues: say REJECTED on its own line, then list what needs fixing.
+
+Diff:
+${DIFF}"
+
+if [[ "$REVIEWER" == "claude -p"* ]]; then
+    RESULT=$(claude -p "$PROMPT" --allowedTools "Read,Grep,Glob" --output-format text --max-turns 1 2>&1)
+elif [[ "$REVIEWER" == "anvil-review-api" ]]; then
+    RESULT=$(anvil-review-api $FILES 2>&1)
+elif [[ "$REVIEWER" == "anvil-review-local" ]]; then
+    RESULT=$(anvil-review-local $FILES 2>&1)
+else
+    RESULT=$($REVIEWER $FILES 2>&1)
+fi
+
+echo "$RESULT"
+
+echo "$RESULT" | grep -qi "APPROVED" && exit 0 || exit 1
