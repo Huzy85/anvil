@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# anvil-plan-answers — answer Claude's planning questions and get final plan
+# Run from within aider: /run anvil-plan-answers "answer1. answer2."
+
+set -uo pipefail
+
+ANSWERS="$*"
+if [ -z "$ANSWERS" ]; then
+    echo "Usage: /run anvil-plan-answers \"your answers to Claude's questions\""
+    exit 1
+fi
+
+PLAN_FILE=".anvil/plan.md"
+if [ ! -f "$PLAN_FILE" ]; then
+    echo "No plan found. Run anvil-plan first."
+    exit 1
+fi
+
+PLAN=$(cat "$PLAN_FILE")
+
+echo "Sending answers to Claude..."
+echo ""
+
+RESULT=$(claude -p "You previously produced this plan and had questions:
+
+${PLAN}
+
+The developer answered:
+${ANSWERS}
+
+Now produce the final implementation plan with numbered tasks. No more questions. Use the same format: ### Task N: Title for each task." --allowedTools "Read,Grep,Glob" --output-format text --max-turns 5 2>&1)
+
+echo "$RESULT"
+
+echo "$RESULT" > "$PLAN_FILE"
+echo ""
+echo "────────────────────────────────────"
+echo "Updated plan saved to .anvil/plan.md"
+echo "Review it, then start building with:"
+echo "  /run anvil-build"
