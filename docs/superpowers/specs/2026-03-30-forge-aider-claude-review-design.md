@@ -1,4 +1,4 @@
-# Forge: Aider + Hercules + Claude Code Review
+# Anvil: Aider + Local LLM + Claude Code Review
 
 **Date:** 2026-03-30
 **Status:** Draft
@@ -35,7 +35,7 @@ User
 User launches aider with Hercules as the model:
 
 ```bash
-forge   # alias for aider with Hercules config
+anvil   # alias for aider with Hercules config
 ```
 
 User types their idea. Hercules asks questions, explores approaches, builds a rough plan. This is normal aider `/chat` mode — no file edits, just conversation. Zero Claude tokens.
@@ -45,20 +45,20 @@ User types their idea. Hercules asks questions, explores approaches, builds a ro
 When the rough plan is ready, user types:
 
 ```
-/run forge-plan
+/run anvil-plan
 ```
 
-This executes `forge-plan.sh`, which:
+This executes `anvil-plan.sh`, which:
 
 1. Extracts the conversation so far from aider's chat history file (`.aider.chat.history.md`)
 2. Calls `claude -p` with the conversation and a planning prompt:
    - "Here's a rough plan from a brainstorming session. Produce a detailed implementation plan with numbered tasks. If you have questions, list them at the top under QUESTIONS."
 3. Parses Claude's response:
    - If QUESTIONS section exists → displays them in the terminal
-   - User answers in aider → another `/run forge-plan-answers "answers here"`
+   - User answers in aider → another `/run anvil-plan-answers "answers here"`
    - Second `claude -p` call with original plan + answers → final task list
    - If no questions → shows task list directly
-4. Saves the task list to `.forge/plan.md` in the project directory
+4. Saves the task list to `.anvil/plan.md` in the project directory
 5. User reviews and approves
 
 **Claude tokens used:** 1-3 short `claude -p` calls.
@@ -68,12 +68,12 @@ This executes `forge-plan.sh`, which:
 User types:
 
 ```
-/run forge-build
+/run anvil-build
 ```
 
-This executes `forge-build.sh`, which:
+This executes `anvil-build.sh`, which:
 
-1. Reads `.forge/plan.md`
+1. Reads `.anvil/plan.md`
 2. For each task:
    a. Feeds the task description to aider as a message (aider sends it to Hercules)
    b. Hercules writes code, aider applies edits and commits
@@ -88,11 +88,11 @@ This executes `forge-build.sh`, which:
 
 ## Components to Build
 
-### 1. `forge` launcher (shell alias/script)
+### 1. `anvil` launcher (shell alias/script)
 
 ```bash
 #!/bin/bash
-# /usr/local/bin/forge or ~/.local/bin/forge
+# /usr/local/bin/anvil or ~/.local/bin/anvil
 OPENBLAS_NUM_THREADS=1 \
 OPENAI_API_BASE=http://127.0.0.1:8081/v1 \
 OPENAI_API_KEY=not-needed \
@@ -101,14 +101,14 @@ aider \
   --no-analytics \
   --no-show-model-warnings \
   --no-show-release-notes \
-  --lint-cmd "forge-review" \
+  --lint-cmd "anvil-review" \
   --auto-lint \
   "$@"
 ```
 
 Works from any directory. No config file needed.
 
-### 2. `forge-review` (Claude review lint command)
+### 2. `anvil-review` (Claude review lint command)
 
 ```bash
 #!/bin/bash
@@ -134,11 +134,11 @@ echo "$RESULT"
 echo "$RESULT" | grep -q "APPROVED" && exit 0 || exit 1
 ```
 
-### 3. `forge-plan` (planning script)
+### 3. `anvil-plan` (planning script)
 
 ```bash
 #!/bin/bash
-# Called via: /run forge-plan
+# Called via: /run anvil-plan
 # Reads aider conversation history, sends to Claude for detailed planning
 
 HISTORY=".aider.chat.history.md"
@@ -150,7 +150,7 @@ fi
 # Extract user/assistant exchanges (skip aider metadata)
 CONVERSATION=$(grep -E "^(####|>|[A-Z])" "$HISTORY" | tail -100)
 
-mkdir -p .forge
+mkdir -p .anvil
 
 RESULT=$(claude -p "You are a senior software architect. Below is a rough plan from a brainstorming session.
 
@@ -169,19 +169,19 @@ $CONVERSATION" --allowedTools "Read,Grep,Glob" --output-format text --max-turns 
 echo "$RESULT"
 
 # Save plan
-echo "$RESULT" > .forge/plan.md
+echo "$RESULT" > .anvil/plan.md
 echo ""
-echo "Plan saved to .forge/plan.md"
-echo "Review it, then run: /run forge-build"
+echo "Plan saved to .anvil/plan.md"
+echo "Review it, then run: /run anvil-build"
 ```
 
-### 4. `forge-plan-answers` (answer Claude's questions)
+### 4. `anvil-plan-answers` (answer Claude's questions)
 
 ```bash
 #!/bin/bash
-# Called via: /run forge-plan-answers "answer1. answer2. answer3."
+# Called via: /run anvil-plan-answers "answer1. answer2. answer3."
 ANSWERS="$1"
-PLAN=$(cat .forge/plan.md 2>/dev/null)
+PLAN=$(cat .anvil/plan.md 2>/dev/null)
 
 RESULT=$(claude -p "You previously produced this plan and asked questions:
 
@@ -193,28 +193,28 @@ $ANSWERS
 Now produce the final implementation plan with numbered tasks. No more questions." --allowedTools "Read,Grep,Glob" --output-format text --max-turns 5 2>&1)
 
 echo "$RESULT"
-echo "$RESULT" > .forge/plan.md
+echo "$RESULT" > .anvil/plan.md
 echo ""
-echo "Updated plan saved to .forge/plan.md"
-echo "Review it, then run: /run forge-build"
+echo "Updated plan saved to .anvil/plan.md"
+echo "Review it, then run: /run anvil-build"
 ```
 
-### 5. `forge-build` (automated build loop)
+### 5. `anvil-build` (automated build loop)
 
 ```bash
 #!/bin/bash
-# Called via: /run forge-build
-# Reads .forge/plan.md, feeds tasks to aider one by one
+# Called via: /run anvil-build
+# Reads .anvil/plan.md, feeds tasks to aider one by one
 
-PLAN=".forge/plan.md"
+PLAN=".anvil/plan.md"
 if [ ! -f "$PLAN" ]; then
-    echo "No plan found. Run forge-plan first."
+    echo "No plan found. Run anvil-plan first."
     exit 1
 fi
 
 echo "Starting build from plan..."
 echo "Hercules will code. Claude will review after each edit."
-echo "Check .forge/build-log.md for progress."
+echo "Check .anvil/build-log.md for progress."
 echo ""
 echo "The tasks from your plan will now be fed to aider."
 echo "Aider's --lint-cmd will trigger Claude review automatically."
@@ -238,15 +238,15 @@ from aider.io import InputOutput
 
 io = InputOutput(yes=True)
 model = Model("openai/Qwen3-Coder-Next")
-coder = Coder.create(main_model=model, io=io, auto_lint=True, lint_cmds={"python": "forge-review"})
+coder = Coder.create(main_model=model, io=io, auto_lint=True, lint_cmds={"python": "anvil-review"})
 
 for task in tasks:
     print(f"\n[Task {task['id']}] {task['title']}")
     coder.run(task["description"])
 ```
 
-The `forge-build` script will be a Python script that:
-1. Parses tasks from `.forge/plan.md`
+The `anvil-build` script will be a Python script that:
+1. Parses tasks from `.anvil/plan.md`
 2. Creates an aider Coder instance with Hercules + Claude lint
 3. Feeds each task to `coder.run()` sequentially
 4. The `--lint-cmd` fires automatically after each edit
@@ -263,7 +263,7 @@ model: openai/Qwen3-Coder-Next
 openai-api-base: http://127.0.0.1:8081/v1
 openai-api-key: not-needed
 auto-lint: true
-lint-cmd: forge-review
+lint-cmd: anvil-review
 no-analytics: true
 no-show-model-warnings: true
 no-show-release-notes: true
@@ -281,13 +281,13 @@ export OPENBLAS_NUM_THREADS=1
 
 ## Model Flexibility
 
-The `forge` launcher defaults to Hercules, but any model works:
+The `anvil` launcher defaults to Hercules, but any model works:
 
 ```bash
-forge                                    # Hercules (default, free)
-forge --model openai/Hermes              # Hermes (smaller, faster, free)
-forge --model deepseek/deepseek-coder    # Deepseek (cheap API)
-forge --model anthropic/claude-haiku     # Haiku (cheap API)
+anvil                                    # Hercules (default, free)
+anvil --model openai/Hermes              # Hermes (smaller, faster, free)
+anvil --model deepseek/deepseek-coder    # Deepseek (cheap API)
+anvil --model anthropic/claude-haiku     # Haiku (cheap API)
 ```
 
 The reviewer is always Claude Code CLI (`claude -p`) regardless of which coding model is used.
@@ -318,32 +318,32 @@ The reviewer is always Claude Code CLI (`claude -p`) regardless of which coding 
 ### In the GitHub repo (what users clone/download)
 ```
 install.sh                   # interactive installer
-scripts/forge                # launcher script
-scripts/forge-review         # review dispatcher (reads ~/.forge.env)
-scripts/forge-review-api     # API-based reviewer alternative
-scripts/forge-review-local   # local LLM reviewer alternative
-scripts/forge-plan           # planning script
-scripts/forge-plan-answers   # answer Claude's questions
-scripts/forge-build          # automated build loop (Python)
+scripts/anvil                # launcher script
+scripts/anvil-review         # review dispatcher (reads ~/.anvil.env)
+scripts/anvil-review-api     # API-based reviewer alternative
+scripts/anvil-review-local   # local LLM reviewer alternative
+scripts/anvil-plan           # planning script
+scripts/anvil-plan-answers   # answer Claude's questions
+scripts/anvil-build          # automated build loop (Python)
 templates/aider.conf.yml     # config template
-templates/forge.env          # reviewer config template
+templates/anvil.env          # reviewer config template
 README.md                    # concept, demo, setup instructions
 ```
 
 ### Installed on user's machine (by install.sh)
 ```
-~/.local/bin/forge           # launcher
-~/.local/bin/forge-review    # reviewer dispatcher
-~/.local/bin/forge-review-api    # API reviewer (optional)
-~/.local/bin/forge-review-local  # local reviewer (optional)
-~/.local/bin/forge-plan      # planner
-~/.local/bin/forge-plan-answers  # plan Q&A
-~/.local/bin/forge-build     # build automation
+~/.local/bin/anvil           # launcher
+~/.local/bin/anvil-review    # reviewer dispatcher
+~/.local/bin/anvil-review-api    # API reviewer (optional)
+~/.local/bin/anvil-review-local  # local reviewer (optional)
+~/.local/bin/anvil-plan      # planner
+~/.local/bin/anvil-plan-answers  # plan Q&A
+~/.local/bin/anvil-build     # build automation
 ~/.aider.conf.yml            # aider config (model + endpoint)
-~/.forge.env                 # reviewer config
+~/.anvil.env                 # reviewer config
 ```
 
-## Installer (`forge-setup`)
+## Installer (`anvil-setup`)
 
 A single script users download and run after installing aider:
 
@@ -354,8 +354,8 @@ curl -fsSL https://raw.githubusercontent.com/<repo>/main/install.sh | bash
 Or clone and run:
 
 ```bash
-git clone https://github.com/<repo>/forge-cli
-cd forge-cli
+git clone https://github.com/<repo>/anvil-cli
+cd anvil-cli
 ./install.sh
 ```
 
@@ -401,58 +401,58 @@ Choice [1]: 1
 ✓ Local LLM responding at http://localhost:8081/v1
 
 Installing scripts to ~/.local/bin/...
-  ✓ forge
-  ✓ forge-review
-  ✓ forge-plan
-  ✓ forge-plan-answers
-  ✓ forge-build
+  ✓ anvil
+  ✓ anvil-review
+  ✓ anvil-plan
+  ✓ anvil-plan-answers
+  ✓ anvil-build
 Writing ~/.aider.conf.yml...
   ✓ Config written
 
-Done. Type 'forge' in any git repo to start.
+Done. Type 'anvil' in any git repo to start.
 ```
 
 3. **Copy scripts** to `~/.local/bin/` with correct permissions
 4. **Write config** — `~/.aider.conf.yml` with chosen model/endpoint
-5. **Write `~/.forge.env`** — reviewer config
+5. **Write `~/.anvil.env`** — reviewer config
 
-### `~/.forge.env` (reviewer config)
+### `~/.anvil.env` (reviewer config)
 
 ```bash
 # Reviewer command — receives filenames, exits 0 for approved
-FORGE_REVIEWER="claude -p"
+ANVIL_REVIEWER="claude -p"
 
 # For API reviewer (no Claude Code):
-# FORGE_REVIEWER="forge-review-api"
-# FORGE_REVIEWER_MODEL="gpt-4o"
-# FORGE_REVIEWER_API_KEY="sk-..."
+# ANVIL_REVIEWER="anvil-review-api"
+# ANVIL_REVIEWER_MODEL="gpt-4o"
+# ANVIL_REVIEWER_API_KEY="sk-..."
 
 # For local LLM reviewer:
-# FORGE_REVIEWER="forge-review-local"
-# FORGE_REVIEWER_URL="http://localhost:11434/v1"
-# FORGE_REVIEWER_MODEL="llama3"
+# ANVIL_REVIEWER="anvil-review-local"
+# ANVIL_REVIEWER_URL="http://localhost:11434/v1"
+# ANVIL_REVIEWER_MODEL="llama3"
 
 # Max retries before escalation (0 = no retries)
-FORGE_MAX_RETRIES=2
+ANVIL_MAX_RETRIES=2
 ```
 
-The `forge-review` script reads `~/.forge.env` and routes to the right reviewer. Users change one file to switch reviewers — no script editing needed.
+The `anvil-review` script reads `~/.anvil.env` and routes to the right reviewer. Users change one file to switch reviewers — no script editing needed.
 
 ### Reviewer alternatives (for users without Claude Code)
 
-**`forge-review-api`** — calls any OpenAI-compatible API for review:
+**`anvil-review-api`** — calls any OpenAI-compatible API for review:
 ```bash
 #!/bin/bash
-# Uses FORGE_REVIEWER_MODEL and FORGE_REVIEWER_API_KEY from ~/.forge.env
+# Uses ANVIL_REVIEWER_MODEL and ANVIL_REVIEWER_API_KEY from ~/.anvil.env
 DIFF=$(git diff HEAD~1 -- "$@" 2>/dev/null)
-curl -s "$FORGE_REVIEWER_URL/chat/completions" \
-  -H "Authorization: Bearer $FORGE_REVIEWER_API_KEY" \
+curl -s "$ANVIL_REVIEWER_URL/chat/completions" \
+  -H "Authorization: Bearer $ANVIL_REVIEWER_API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"$FORGE_REVIEWER_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Review this diff. APPROVED or REJECTED with feedback.\n\n$DIFF\"}]}" \
+  -d "{\"model\":\"$ANVIL_REVIEWER_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Review this diff. APPROVED or REJECTED with feedback.\n\n$DIFF\"}]}" \
   | python3 -c "import sys,json; r=json.load(sys.stdin)['choices'][0]['message']['content']; print(r); sys.exit(0 if 'APPROVED' in r else 1)"
 ```
 
-**`forge-review-local`** — same but hitting a local endpoint, no API key needed.
+**`anvil-review-local`** — same but hitting a local endpoint, no API key needed.
 
 ## Risks and Mitigations
 
