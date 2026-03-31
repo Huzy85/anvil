@@ -18,17 +18,23 @@ DIFF=$(git diff HEAD -- $FILES 2>/dev/null)
 [ -z "$DIFF" ] && DIFF=$(git diff HEAD~1 -- $FILES 2>/dev/null)
 [ -z "$DIFF" ] && exit 0
 
-# Escape diff for JSON
-DIFF_JSON=$(python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" <<< "$DIFF")
+# Combine review prompt with diff, JSON-escaped
+COMBINED_CONTENT=$(python3 -c "
+import sys,json
+prompt = '''Review this code change. Be concise. If correct: say APPROVED. If issues: say REJECTED and list fixes needed.
 
-PROMPT="Review this code change. Be concise. If correct: say APPROVED. If issues: say REJECTED and list fixes needed.\n\nDiff:\n"
+Diff:
+'''
+diff = sys.stdin.read()
+print(json.dumps(prompt + diff))
+" <<< "$DIFF")
 
 RESULT=$(curl -s "${API_URL}/chat/completions" \
     -H "Authorization: Bearer ${API_KEY}" \
     -H "Content-Type: application/json" \
     -d "{
         \"model\": \"${API_MODEL}\",
-        \"messages\": [{\"role\": \"user\", \"content\": ${DIFF_JSON}}],
+        \"messages\": [{\"role\": \"user\", \"content\": ${COMBINED_CONTENT}}],
         \"max_tokens\": 1024
     }" 2>/dev/null | python3 -c "
 import sys, json
