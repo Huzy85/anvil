@@ -6,7 +6,7 @@
 
 Anvil lets you use a free, local AI model to write your code while a smarter model (like Claude) checks every change before it goes in. You describe what you want, Anvil breaks it into steps, your local model writes the code, and Claude catches any mistakes. You get the quality of a top-tier AI without paying for every single line it writes.
 
-It works on top of [aider](https://github.com/paul-gauthier/aider), an open-source coding tool. If you've been vibe coding with Claude or ChatGPT and watching your credits disappear, Anvil cuts that by about 70%.
+It works on top of [aider](https://github.com/paul-gauthier/aider), an open-source coding tool. If you've been vibe coding with Claude or ChatGPT and watching your credits disappear, Anvil keeps your paid model for the work that matters (planning and review) and lets the free model handle the bulk writing.
 
 ## How it works
 
@@ -167,16 +167,17 @@ Override on the fly:
 anvil --model openai/different-model
 ```
 
-## Token economics
+## Where your tokens go
 
-| Activity | Model | Cost |
-|----------|-------|------|
-| Chatting / brainstorming | Local LLM | Free |
-| Code writing | Local LLM | Free |
-| Code iteration / fixes | Local LLM | Free |
-| Planning (1-3 calls) | Claude -p | ~3 subscription messages |
-| Review per task (1-2 calls) | Claude -p | ~2 messages per task |
-| **Typical 5-task project** | | **~15 messages vs ~50+** |
+| Activity | Who does it | Paid? |
+|----------|------------|-------|
+| Chatting and brainstorming | Local LLM | No |
+| Writing code | Local LLM | No |
+| Fixing rejected code | Local LLM | No |
+| Planning (once per project) | Claude / Gemini / Codex | Yes |
+| Reviewing each edit | Claude / Gemini / Codex | Yes |
+
+The bulk of the work (writing and rewriting code) stays on the free local model. You only pay for planning and review.
 
 ## What this is not
 
