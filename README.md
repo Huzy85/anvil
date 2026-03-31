@@ -2,9 +2,11 @@
 
 > v0.1.0 — First public release
 
-Local LLM codes. Claude reviews. You ship.
+**Build software with AI without burning through your subscription.**
 
-anvil-cli wraps [aider](https://github.com/paul-gauthier/aider) so a local LLM handles the coding and Claude Code CLI reviews every change. Saves ~70% of Claude subscription tokens.
+Anvil lets you use a free, local AI model to write your code while a smarter model (like Claude) checks every change before it goes in. You describe what you want, Anvil breaks it into steps, your local model writes the code, and Claude catches any mistakes. You get the quality of a top-tier AI without paying for every single line it writes.
+
+It works on top of [aider](https://github.com/paul-gauthier/aider), an open-source coding tool. If you've been vibe coding with Claude or ChatGPT and watching your credits disappear, Anvil cuts that by about 70%.
 
 ## How it works
 
