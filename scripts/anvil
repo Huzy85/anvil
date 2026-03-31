@@ -48,7 +48,7 @@ esac
 # No subcommand — launch aider
 if [[ "$*" != *"--message"* ]] && [[ "$*" != *"--message-file"* ]]; then
     echo ""
-    echo "  Anvil — Local LLM codes. Claude reviews."
+    echo "  Anvil v0.1.0 — Local LLM codes. Claude reviews."
     echo "  ─────────────────────────────────────────"
     echo "  /run plan       Claude plans your idea"
     echo "  /run build      Auto-build from plan"
