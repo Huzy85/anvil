@@ -56,7 +56,7 @@ When aider edits a file, `anvil-review` runs automatically:
 
 1. **Review 1-2:** Claude reads the diff and the actual files. If the code has real bugs (crashes, wrong logic, security issues), it says REJECTED with exact fixes. Style issues are ignored.
 2. **Review 3 (escalation):** If the local LLM can't fix the issues after 2 rejections, Claude takes over and fixes the code directly using file editing tools.
-3. **Timeout/rate-limit:** If Claude is unavailable, the review is skipped and the code is approved to avoid blocking the build.
+3. **Timeout/rate-limit:** If Claude is unavailable, the build stops and tells you. You decide whether to continue, retry, or switch to a different reviewer.
 
 ## Troubleshooting
 

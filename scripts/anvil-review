@@ -101,16 +101,14 @@ ${DIFF}"
         FIX_EXIT=$?
         if [ $FIX_EXIT -eq 124 ]; then
             echo "  TIMEOUT: Claude did not respond within 120s"
-            echo "  Skipping review — approve and move on"
+            echo "  Code was NOT reviewed. Check the changes manually."
             echo "  ────────────────────────────────────────────"
-            rm -f "$COUNTER_FILE" "$TOTAL_FILE"
-            exit 0
+            exit 1
         elif echo "$FIX_RESULT" | grep -qi "rate.limit\|overloaded\|529\|503"; then
             echo "  RATE LIMITED: Claude is busy"
-            echo "  Skipping review — approve and move on"
+            echo "  Code was NOT reviewed. Check the changes manually."
             echo "  ────────────────────────────────────────────"
-            rm -f "$COUNTER_FILE" "$TOTAL_FILE"
-            exit 0
+            exit 1
         fi
         echo "$FIX_RESULT" | tail -5
         echo "  FIXED by Claude"
@@ -159,10 +157,10 @@ ${DIFF}"
 if [[ "$REVIEWER" == "claude -p"* ]]; then
     RESULT=$(timeout 90 claude -p "$PROMPT" --allowedTools "Read,Grep,Glob" --output-format text --max-turns 3 2>&1)
     if [ $? -eq 124 ]; then
-        echo "  TIMEOUT: Claude review timed out after 90s — approving"
+        echo "  TIMEOUT: Claude review timed out after 90s"
+        echo "  Code was NOT reviewed. Check the changes manually."
         echo "  ────────────────────────────────────────────"
-        rm -f "$COUNTER_FILE" "$TOTAL_FILE"
-        exit 0
+        exit 1
     fi
 elif [[ "$REVIEWER" == "anvil-review-api" ]]; then
     RESULT=$(anvil-review-api $FILES 2>&1)
