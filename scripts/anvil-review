@@ -46,6 +46,12 @@ done
 
 [ -z "$DIFF" ] && exit 0
 
+# ── Load project context if available ─────────────
+REVIEW_CONTEXT=""
+if [ -f ".anvil/review-context.md" ]; then
+    REVIEW_CONTEXT=$(cat ".anvil/review-context.md")
+fi
+
 # Truncate huge diffs
 DIFF_LEN=${#DIFF}
 if [ "$DIFF_LEN" -gt "$MAX_DIFF_CHARS" ]; then
@@ -62,7 +68,10 @@ if [ "$REJECTION_COUNT" -ge "$MAX_RETRIES" ]; then
     echo "  Claude is fixing the code directly..."
 
     FIX_PROMPT="The following code has been written by a local LLM and rejected $REJECTION_COUNT times during review. The LLM could not fix it.
-
+${REVIEW_CONTEXT:+
+Project Context:
+${REVIEW_CONTEXT}
+}
 Read the files, find the bugs, and fix them directly using the Edit tool. Focus on:
 - Runtime errors and wrong logic
 - Wrong mock patch targets (must patch where imported, not where defined)
@@ -115,7 +124,10 @@ If there are real bugs: say REJECTED on its own line, then for EACH bug provide:
 - The exact fix: show the corrected code the LLM should write
 
 The LLM fixing this code is not very smart. Give it exact code to copy, not descriptions.
-
+${REVIEW_CONTEXT:+
+Project Context:
+${REVIEW_CONTEXT}
+}
 Diff:
 ${DIFF}"
 

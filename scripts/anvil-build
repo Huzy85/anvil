@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """anvil-build — automated build loop.
 
-Parses tasks from .anvil/plan.md, feeds each to aider via its Python API.
-Aider's --lint-cmd triggers Claude review automatically after each edit.
+Parses tasks from .anvil/plan.md, feeds each to aider with full project
+context so the LLM knows how each task fits into the bigger picture.
+Claude reviews automatically after each edit via --lint-cmd.
 
 Run from within aider: /run anvil-build
 Or standalone: anvil-build
@@ -10,107 +11,164 @@ Or standalone: anvil-build
 
 import os
 import re
+import subprocess
 import sys
+import tempfile
 
 
-def parse_tasks(plan_path):
-    """Extract tasks from the plan markdown."""
+def parse_plan(plan_path):
+    """Extract overview and tasks from the plan markdown."""
     with open(plan_path) as f:
         content = f.read()
 
+    # Everything before the first ### Task is the overview
+    parts = re.split(r'(### Task \d+:)', content)
+    overview = parts[0].strip() if parts else ""
+
+    # Extract tasks
     tasks = []
-    # Split on ### Task N: Title
-    parts = re.split(r'### Task \d+:\s*', content)
+    task_splits = re.split(r'### Task \d+:\s*', content)
     titles = re.findall(r'### Task \d+:\s*(.+)', content)
 
-    for i, (title, body) in enumerate(zip(titles, parts[1:]), 1):
+    for i, (title, body) in enumerate(zip(titles, task_splits[1:]), 1):
         tasks.append({
             "id": i,
             "title": title.strip(),
-            "description": f"Task {i}: {title.strip()}\n\n{body.strip()}",
+            "body": body.strip(),
         })
-    return tasks
+    return overview, tasks
 
 
-def build_with_aider_api(tasks):
-    """Drive aider programmatically via its Python API."""
-    try:
-        from aider.coders import Coder
-        from aider.models import Model
-        from aider.io import InputOutput
-    except ImportError:
-        print("Error: aider not installed. Run: pip install aider-chat")
-        sys.exit(1)
+def build_context(overview, tasks, current_task_id, completed):
+    """Build a context block that tells the LLM where this task fits."""
+    lines = []
 
-    # Load config from env / anvil.env
-    anvil_env = os.path.expanduser("~/.anvil.env")
-    env = {}
-    if os.path.exists(anvil_env):
-        with open(anvil_env) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    env[k.strip()] = v.strip().strip('"').strip("'")
+    lines.append("=" * 60)
+    lines.append("PROJECT CONTEXT — Read this before coding.")
+    lines.append("=" * 60)
+    lines.append("")
 
-    max_retries = int(env.get("ANVIL_MAX_RETRIES", "2"))
+    # Plan overview (goal, architecture, tech stack)
+    if overview:
+        # Take first ~30 lines of overview — enough for goal + architecture
+        overview_lines = overview.split("\n")[:30]
+        lines.append("## Project Overview")
+        lines.append("")
+        lines.extend(overview_lines)
+        lines.append("")
 
-    io = InputOutput(yes=True)
-    model_name = os.environ.get("AIDER_MODEL", "openai/Qwen3-Coder-Next")
-    model = Model(model_name)
+    # What's been completed so far
+    if completed:
+        lines.append("## Completed Tasks")
+        lines.append("")
+        for t in completed:
+            lines.append(f"  ✓ Task {t['id']}: {t['title']}")
+        lines.append("")
 
-    # Discover files in the repo
-    import glob
-    fnames = []
-    for ext in ["*.py", "*.js", "*.ts", "*.jsx", "*.tsx", "*.go", "*.rs"]:
-        fnames.extend(glob.glob(f"**/{ext}", recursive=True))
+    # What files exist now
+    existing = []
+    for ext in ["*.py", "*.js", "*.ts", "*.jsx", "*.tsx", "*.go", "*.rs",
+                "*.html", "*.css", "*.yaml", "*.yml", "*.json", "*.sh"]:
+        import glob
+        existing.extend(glob.glob(f"**/{ext}", recursive=True))
+    existing = sorted(set(f for f in existing if not f.startswith(".git/")))
 
-    coder = Coder.create(
-        main_model=model,
-        io=io,
-        fnames=fnames[:20],  # limit to avoid overwhelming context
-        auto_lint=True,
-        lint_cmds={"python": "anvil-review"},
-    )
+    if existing:
+        lines.append("## Existing Files")
+        lines.append("")
+        for f in existing[:30]:
+            lines.append(f"  - {f}")
+        if len(existing) > 30:
+            lines.append(f"  ... and {len(existing) - 30} more")
+        lines.append("")
 
+    # What's coming next (so the LLM doesn't build things that later tasks handle)
+    remaining = [t for t in tasks if t["id"] > current_task_id]
+    if remaining:
+        lines.append("## Upcoming Tasks (do NOT implement these now)")
+        lines.append("")
+        for t in remaining[:5]:
+            lines.append(f"  - Task {t['id']}: {t['title']}")
+        lines.append("")
+
+    lines.append("=" * 60)
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def build_review_context(overview, tasks, current_task_id, completed):
+    """Write a context file for Claude's review to read."""
+    ctx_path = ".anvil/review-context.md"
+    os.makedirs(".anvil", exist_ok=True)
+
+    lines = []
+    lines.append("# Anvil Review Context")
+    lines.append("")
+    lines.append(f"Currently reviewing: Task {current_task_id}")
+    lines.append("")
+
+    if overview:
+        overview_lines = overview.split("\n")[:20]
+        lines.append("## Project Goal")
+        lines.extend(overview_lines)
+        lines.append("")
+
+    if completed:
+        lines.append("## Already Completed")
+        for t in completed:
+            lines.append(f"- Task {t['id']}: {t['title']}")
+        lines.append("")
+
+    current = next((t for t in tasks if t["id"] == current_task_id), None)
+    if current:
+        lines.append("## Current Task Requirements")
+        lines.append(f"### Task {current['id']}: {current['title']}")
+        lines.append(current["body"][:2000])
+        lines.append("")
+
+    with open(ctx_path, "w") as f:
+        f.write("\n".join(lines))
+
+    return ctx_path
+
+
+def build_with_message_file(overview, tasks):
+    """Drive aider via --message-file for each task with full context."""
     total = len(tasks)
     accepted = 0
     failed = 0
+    completed = []
 
     for task in tasks:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"[Task {task['id']}/{total}] {task['title']}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
-        try:
-            coder.run(task["description"])
-            accepted += 1
-            print(f"\n✓ Task {task['id']} complete")
-        except Exception as e:
-            print(f"\n✗ Task {task['id']} failed: {e}")
-            failed += 1
+        # Build context for Hercules
+        context = build_context(overview, tasks, task["id"], completed)
 
-    print(f"\n{'='*60}")
-    print(f"Build complete: {accepted} accepted, {failed} failed out of {total}")
-    print(f"{'='*60}")
+        # Build context file for Claude's review
+        build_review_context(overview, tasks, task["id"], completed)
 
+        # Compose the full message: context + task
+        message = f"""{context}
 
-def build_with_message_file(tasks):
-    """Fallback: drive aider via --message-file for each task."""
-    import subprocess
-    import tempfile
+## YOUR TASK
 
-    total = len(tasks)
-    accepted = 0
-    failed = 0
+Task {task['id']}: {task['title']}
 
-    for task in tasks:
-        print(f"\n{'='*60}")
-        print(f"[Task {task['id']}/{total}] {task['title']}")
-        print(f"{'='*60}\n")
+{task['body']}
+
+IMPORTANT:
+- Follow the task requirements exactly.
+- Use the same function signatures, class names, and file names as specified.
+- Check existing files before creating new ones — don't duplicate what's already built.
+- If other tasks created interfaces you depend on, match them exactly.
+"""
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write(task["description"])
+            f.write(message)
             msg_file = f.name
 
         try:
@@ -133,19 +191,29 @@ def build_with_message_file(tasks):
             )
             if result.returncode == 0:
                 accepted += 1
+                completed.append(task)
                 print(f"\n✓ Task {task['id']} complete")
             else:
                 failed += 1
+                # Still track as completed for context (files may exist)
+                completed.append(task)
                 print(f"\n✗ Task {task['id']} exited with code {result.returncode}")
         except subprocess.TimeoutExpired:
             failed += 1
+            completed.append(task)
             print(f"\n✗ Task {task['id']} timed out after 600s")
         finally:
             os.unlink(msg_file)
 
-    print(f"\n{'='*60}")
+    # Clean up review context
+    try:
+        os.unlink(".anvil/review-context.md")
+    except OSError:
+        pass
+
+    print(f"\n{'=' * 60}")
     print(f"Build complete: {accepted} accepted, {failed} failed out of {total}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 def main():
@@ -155,7 +223,7 @@ def main():
         print("Run anvil-plan first.")
         sys.exit(1)
 
-    tasks = parse_tasks(plan_path)
+    overview, tasks = parse_plan(plan_path)
     if not tasks:
         print("No tasks found in plan. Check .anvil/plan.md format.")
         print("Expected: ### Task N: Title")
@@ -175,13 +243,7 @@ def main():
         print("Aborted.")
         sys.exit(0)
 
-    # Try Python API first, fall back to message-file
-    try:
-        from aider.coders import Coder
-        build_with_aider_api(tasks)
-    except ImportError:
-        print("Aider Python API not available, using --message-file fallback")
-        build_with_message_file(tasks)
+    build_with_message_file(overview, tasks)
 
 
 if __name__ == "__main__":
