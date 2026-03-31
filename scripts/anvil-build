@@ -13,7 +13,15 @@ import os
 import re
 import subprocess
 import sys
+import argparse
 import tempfile
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Anvil automated build loop")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Show tasks without executing them")
+    return parser.parse_args()
 
 
 def parse_plan(plan_path):
@@ -217,6 +225,7 @@ IMPORTANT:
 
 
 def main():
+    args = parse_args()
     plan_path = ".anvil/plan.md"
     if not os.path.exists(plan_path):
         print("No plan found at .anvil/plan.md")
@@ -236,6 +245,24 @@ def main():
 
     for t in tasks:
         print(f"  {t['id']}. {t['title']}")
+
+    if args.dry_run:
+        print()
+        print("Dry run — showing task details without executing.")
+        print()
+        for t in tasks:
+            context = build_context(overview, tasks, t["id"],
+                                    [x for x in tasks if x["id"] < t["id"]])
+            print(f"{'=' * 60}")
+            print(f"[Task {t['id']}/{len(tasks)}] {t['title']}")
+            print(f"{'=' * 60}")
+            print(f"Context length: {len(context)} chars")
+            print(f"Task body length: {len(t['body'])} chars")
+            print(f"Files mentioned: ", end="")
+            files = re.findall(r'`([^`]+\.\w{1,4})`', t['body'])
+            print(", ".join(files) if files else "(none detected)")
+            print()
+        return
 
     print()
     confirm = input("Start building? [Y/n] ").strip().lower()
