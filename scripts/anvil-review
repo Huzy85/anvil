@@ -29,6 +29,16 @@ MAX_RETRIES="${ANVIL_MAX_RETRIES:-2}"
 REVIEW_TIMEOUT="${ANVIL_REVIEW_TIMEOUT:-90}"
 ESCALATION_TIMEOUT="${ANVIL_ESCALATION_TIMEOUT:-120}"
 
+# ── Usage tracking ─────────────────────────────────
+USAGE_LOG="${ANVIL_USAGE_LOG:-.anvil/usage.log}"
+log_usage() {
+    local TYPE="$1"    # review | escalation
+    local CHARS="$2"   # chars sent to reviewer
+    local RESULT="$3"  # approved | rejected | fixed | timeout | error
+    mkdir -p "$(dirname "$USAGE_LOG")"
+    echo "$(date +%s)	${TYPE}	${CHARS}	${RESULT}	${REVIEWER}" >> "$USAGE_LOG"
+}
+
 FILES="$@"
 [ -z "$FILES" ] && exit 0
 
@@ -93,12 +103,14 @@ check_result_error() {
         echo "  TIMEOUT: Reviewer did not respond within ${REVIEW_TIMEOUT}s"
         echo "  Code was NOT reviewed. Check the changes manually."
         echo "  ────────────────────────────────────────────"
+        log_usage "review" "${#PROMPT}" "timeout"
         exit 1
     fi
     if echo "$RESULT" | grep -qi "rate.limit\|overloaded\|529\|503\|too many requests"; then
         echo "  RATE LIMITED: Reviewer is busy"
         echo "  Code was NOT reviewed. Check the changes manually."
         echo "  ────────────────────────────────────────────"
+        log_usage "review" "${#PROMPT}" "error"
         exit 1
     fi
     if echo "$RESULT" | grep -qi "Review error:\|connection refused\|Connection refused"; then
@@ -106,6 +118,7 @@ check_result_error() {
         echo "  $RESULT"
         echo "  Code was NOT reviewed. Check the changes manually."
         echo "  ────────────────────────────────────────────"
+        log_usage "review" "${#PROMPT}" "error"
         exit 1
     fi
 }
@@ -144,17 +157,20 @@ ${DIFF}"
             echo "  TIMEOUT: Claude did not respond within ${ESCALATION_TIMEOUT}s"
             echo "  Code was NOT fixed. Check the changes manually."
             echo "  ────────────────────────────────────────────"
+            log_usage "escalation" "${#FIX_PROMPT}" "timeout"
             exit 1
         elif echo "$FIX_RESULT" | grep -qi "rate.limit\|overloaded\|529\|503"; then
             echo "  RATE LIMITED: Claude is busy"
             echo "  Code was NOT fixed. Check the changes manually."
             echo "  ────────────────────────────────────────────"
+            log_usage "escalation" "${#FIX_PROMPT}" "error"
             exit 1
         fi
         echo "$FIX_RESULT" | tail -5
         echo "  FIXED by Claude"
         echo "  ────────────────────────────────────────────"
         echo ""
+        log_usage "escalation" "${#FIX_PROMPT}" "fixed"
         # Reset counters
         rm -f "$COUNTER_FILE" "$TOTAL_FILE"
         exit 0
@@ -168,6 +184,7 @@ ${DIFF}"
         echo "    2. Switch to Claude Code CLI: set ANVIL_REVIEWER=\"claude -p\" in ~/.anvil.env"
         echo "    3. Reset the counter and continue: rm /tmp/anvil-review-counts/${FILE_KEY}*"
         echo "  ────────────────────────────────────────────"
+        log_usage "escalation" "0" "no_fixer"
         exit 1
     fi
 fi
@@ -228,6 +245,7 @@ if echo "$RESULT" | grep -qi "APPROVED"; then
     echo "  APPROVED"
     echo "  ────────────────────────────────────────────"
     echo ""
+    log_usage "review" "${#PROMPT}" "approved"
     # Reset counters on approval
     rm -f "$COUNTER_FILE" "$TOTAL_FILE"
     exit 0
@@ -240,5 +258,6 @@ else
     echo ""
     echo "  ────────────────────────────────────────────"
     echo ""
+    log_usage "review" "${#PROMPT}" "rejected"
     exit 1
 fi

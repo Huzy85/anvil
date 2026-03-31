@@ -141,12 +141,67 @@ def build_review_context(overview, tasks, current_task_id, completed):
     return ctx_path
 
 
+def print_usage_summary(local_chars):
+    """Print token usage summary from the review log."""
+    usage_log = ".anvil/usage.log"
+    if not os.path.exists(usage_log):
+        return
+
+    reviewer_chars = 0
+    reviews = 0
+    escalations = 0
+    with open(usage_log) as f:
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) < 4:
+                continue
+            rtype, chars, result = parts[1], int(parts[2]), parts[3]
+            reviewer_chars += chars
+            if rtype == "review":
+                reviews += 1
+            elif rtype == "escalation":
+                escalations += 1
+
+    total_chars = local_chars + reviewer_chars
+    if total_chars == 0:
+        return
+
+    local_pct = (local_chars / total_chars) * 100
+    reviewer_pct = (reviewer_chars / total_chars) * 100
+
+    # Rough token estimate: ~4 chars per token for English
+    local_tokens = local_chars // 4
+    reviewer_tokens = reviewer_chars // 4
+
+    print()
+    print(f"  Token usage estimate")
+    print(f"  ─────────────────────────────────────────")
+    print(f"  Local LLM (free):   ~{local_tokens:,} tokens ({local_pct:.0f}%)")
+    print(f"  Reviewer (paid):    ~{reviewer_tokens:,} tokens ({reviewer_pct:.0f}%)")
+    print(f"  Reviews: {reviews} | Escalations: {escalations}")
+    print(f"  ─────────────────────────────────────────")
+    print()
+
+    # Clean the log for next build
+    try:
+        os.unlink(usage_log)
+    except OSError:
+        pass
+
+
 def build_with_message_file(overview, tasks):
     """Drive aider via --message-file for each task with full context."""
     total = len(tasks)
     accepted = 0
     failed = 0
     completed = []
+    local_chars_total = 0
+
+    # Clear stale usage log from previous build
+    try:
+        os.unlink(".anvil/usage.log")
+    except OSError:
+        pass
 
     for task in tasks:
         print(f"\n{'=' * 60}")
@@ -174,6 +229,8 @@ IMPORTANT:
 - Check existing files before creating new ones — don't duplicate what's already built.
 - If other tasks created interfaces you depend on, match them exactly.
 """
+
+        local_chars_total += len(message)
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(message)
@@ -222,6 +279,9 @@ IMPORTANT:
     print(f"\n{'=' * 60}")
     print(f"Build complete: {accepted} accepted, {failed} failed out of {total}")
     print(f"{'=' * 60}")
+
+    # Print usage summary
+    print_usage_summary(local_chars_total)
 
 
 def main():
