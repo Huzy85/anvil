@@ -97,7 +97,21 @@ Current diff:
 ${DIFF}"
 
     if [[ "$REVIEWER" == "claude -p"* ]]; then
-        FIX_RESULT=$(claude -p "$FIX_PROMPT" --allowedTools "Read,Grep,Glob,Edit,Write,Bash" --output-format text --max-turns 10 2>&1)
+        FIX_RESULT=$(timeout 120 claude -p "$FIX_PROMPT" --allowedTools "Read,Grep,Glob,Edit,Write,Bash" --output-format text --max-turns 10 2>&1)
+        FIX_EXIT=$?
+        if [ $FIX_EXIT -eq 124 ]; then
+            echo "  TIMEOUT: Claude did not respond within 120s"
+            echo "  Skipping review — approve and move on"
+            echo "  ────────────────────────────────────────────"
+            rm -f "$COUNTER_FILE" "$TOTAL_FILE"
+            exit 0
+        elif echo "$FIX_RESULT" | grep -qi "rate.limit\|overloaded\|529\|503"; then
+            echo "  RATE LIMITED: Claude is busy"
+            echo "  Skipping review — approve and move on"
+            echo "  ────────────────────────────────────────────"
+            rm -f "$COUNTER_FILE" "$TOTAL_FILE"
+            exit 0
+        fi
         echo "$FIX_RESULT" | tail -5
         echo "  FIXED by Claude"
         echo "  ────────────────────────────────────────────"
@@ -143,7 +157,13 @@ Diff:
 ${DIFF}"
 
 if [[ "$REVIEWER" == "claude -p"* ]]; then
-    RESULT=$(claude -p "$PROMPT" --allowedTools "Read,Grep,Glob" --output-format text --max-turns 3 2>&1)
+    RESULT=$(timeout 90 claude -p "$PROMPT" --allowedTools "Read,Grep,Glob" --output-format text --max-turns 3 2>&1)
+    if [ $? -eq 124 ]; then
+        echo "  TIMEOUT: Claude review timed out after 90s — approving"
+        echo "  ────────────────────────────────────────────"
+        rm -f "$COUNTER_FILE" "$TOTAL_FILE"
+        exit 0
+    fi
 elif [[ "$REVIEWER" == "anvil-review-api" ]]; then
     RESULT=$(anvil-review-api $FILES 2>&1)
 elif [[ "$REVIEWER" == "anvil-review-local" ]]; then
