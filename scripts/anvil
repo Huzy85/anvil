@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # anvil — launch aider with local LLM + Claude Code review
-# https://github.com/steamvibe/anvil-cli
+# https://github.com/Huzy85/anvil
 
 set -euo pipefail
 
@@ -23,6 +23,7 @@ case "${1:-}" in
         echo "  /run plan             Send conversation to Claude for a task plan"
         echo "  /run plan-answers     Answer Claude's planning questions"
         echo "  /run build            Auto-feed plan tasks one by one"
+        echo "  /run tokens           Show token usage for this project"
         echo "  /run help             This help message"
         echo ""
         echo "  Config files:"
@@ -42,6 +43,27 @@ case "${1:-}" in
     build)
         shift
         exec anvil-build "$@"
+        ;;
+    tokens)
+        USAGE_LOG="${ANVIL_USAGE_LOG:-.anvil/usage.log}"
+        if [ ! -f "$USAGE_LOG" ]; then
+            echo "  No usage log found at $USAGE_LOG"
+            exit 0
+        fi
+        TOTAL=$(awk -F'\t' '{sum+=$3} END {print sum+0}' "$USAGE_LOG")
+        REVIEWS=$(grep -c "review" "$USAGE_LOG" 2>/dev/null || true)
+        ESCALATIONS=$(grep -c "escalation" "$USAGE_LOG" 2>/dev/null || true)
+        APPROVED=$(grep -c "approved" "$USAGE_LOG" 2>/dev/null || true)
+        REJECTED=$(grep -c "rejected" "$USAGE_LOG" 2>/dev/null || true)
+        echo ""
+        echo "  Anvil Token Usage"
+        echo "  ─────────────────────────────────────────"
+        echo "  Total tokens sent : ~${TOTAL}"
+        echo "  Reviews           : ${REVIEWS} (${APPROVED} approved, ${REJECTED} rejected)"
+        echo "  Escalations       : ${ESCALATIONS}"
+        echo "  Log               : ${USAGE_LOG}"
+        echo ""
+        exit 0
         ;;
 esac
 
