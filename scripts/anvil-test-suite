@@ -24,7 +24,7 @@ TEST_API_BASE="${ANVIL_TEST_API_BASE:-http://localhost:8080/v1}"
 TEST_API_KEY="${ANVIL_TEST_API_KEY:-not-needed}"
 
 LOG="${1:-${HOME}/anvil-test-results.md}"
-TOTAL=14
+TOTAL=24
 PASS=0
 FAIL=0
 ERRORS=""
@@ -79,18 +79,18 @@ run_test() {
         --model "$TEST_MODEL" \
         --openai-api-base "$TEST_API_BASE" \
         --openai-api-key "$TEST_API_KEY" \
-        > "$LOGFILE" 2>&1
+        < /dev/null > "$LOGFILE" 2>&1
 
     AIDER_EXIT=$?
 
     # Capture files before popd
     FILES=$(find . \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.go" -o -name "*.rs" \) -not -path "./.git/*" -not -path "./target/*" 2>/dev/null | sort)
 
-    REVIEW_COUNT=$(grep -c "Claude Review" "$LOGFILE" 2>/dev/null || true)
+    REVIEW_COUNT=$(grep -c "Review" "$LOGFILE" 2>/dev/null || true)
     APPROVED_COUNT=$(grep -c "APPROVED" "$LOGFILE" 2>/dev/null || true)
     REJECTED_COUNT=$(grep -c "REJECTED" "$LOGFILE" 2>/dev/null || true)
-    FIX_COUNT=$(grep -c "Claude Fix" "$LOGFILE" 2>/dev/null || true)
-    FIXED_COUNT=$(grep -c "FIXED by Claude" "$LOGFILE" 2>/dev/null || true)
+    FIX_COUNT=$(grep -c "Escalation" "$LOGFILE" 2>/dev/null || true)
+    FIXED_COUNT=$(grep -c "FIXED by" "$LOGFILE" 2>/dev/null || true)
 
     REVIEW_COUNT="${REVIEW_COUNT:-0}"
     APPROVED_COUNT="${APPROVED_COUNT:-0}"
@@ -110,7 +110,7 @@ run_test() {
         TEST_EXIT=$?
         TEST_RESULT=$([ $TEST_EXIT -eq 0 ] && echo "PASS" || echo "FAIL")
     elif compgen -G "*.test.ts" > /dev/null 2>&1; then
-        TEST_OUTPUT=$(npx tsc --strict *.ts 2>&1 && node *.test.js 2>&1)
+        TEST_OUTPUT=$(tsc --strict *.ts 2>&1 && node *.test.js 2>&1)
         TEST_EXIT=$?
         TEST_RESULT=$([ $TEST_EXIT -eq 0 ] && echo "PASS" || echo "FAIL")
     elif compgen -G "*_test.go" > /dev/null 2>&1; then
@@ -133,10 +133,13 @@ run_test() {
     echo "- Tests: $TEST_RESULT" >> "$LOG"
 
     # ── Classify result ──────────────────────────────────────────────────
-    if [ "$AIDER_EXIT" = "124" ]; then
-        echo "- ERROR: Timed out after 300s" >> "$LOG"
+    if [ "$AIDER_EXIT" = "124" ] && [ "$TEST_RESULT" != "PASS" ]; then
+        echo "- ERROR: Timed out after 300s (no passing tests)" >> "$LOG"
         FAIL=$((FAIL + 1))
-        ERRORS="${ERRORS}\n  $NUM. $NAME — timeout"
+        ERRORS="${ERRORS}\n  $NUM. $NAME — timeout, no passing tests"
+    elif [ "$AIDER_EXIT" = "124" ] && [ "$TEST_RESULT" = "PASS" ]; then
+        echo "- WARNING: Timed out after 300s but tests passed" >> "$LOG"
+        PASS=$((PASS + 1))
     elif grep -q "can't start new thread\|RuntimeError" "$LOGFILE" 2>/dev/null && [ -z "$FILES" ]; then
         echo "- ERROR: Thread limit hit — run outside claude-code.slice" >> "$LOG"
         FAIL=$((FAIL + 1))
@@ -211,6 +214,568 @@ run_test 13 "Go — Ring Buffer" \
 
 run_test 14 "Rust — Simple HashMap" \
 "Create src/lib.rs with a SimpleMap<K, V> struct using Vec<(K, V)> internally (no std HashMap). Implement: new(), insert(key, value), get(&key) -> Option<&V>, remove(&key) -> Option<V>, len(). K must be PartialEq. Add #[cfg(test)] mod tests with: test_insert_and_get, test_remove, test_get_missing_returns_none, test_len. Create Cargo.toml with package name 'simplemap'. Run with: cargo test"
+
+# ── Advanced tests — pre-seeded repos ──────────────────────────────────────
+# These tests start with existing code and ask the LLM to modify, fix, or extend it.
+# Tests the reviewer's ability to catch regressions and verify changes to existing code.
+
+run_test_with_seed() {
+    local NUM="$1"
+    local NAME="$2"
+    local SEED_SCRIPT="$3"  # bash commands to create initial files
+    local PROMPT="$4"
+    local WORKDIR="/tmp/anvil-t${NUM}"
+    local LOGFILE="/tmp/anvil-output-${NUM}.log"
+    local PROMPTFILE="/tmp/anvil-prompt-${NUM}.md"
+
+    echo "=== Test $NUM: $NAME ==="
+    echo "### Test $NUM: $NAME" >> "$LOG"
+    echo "" >> "$LOG"
+
+    rm -rf "$WORKDIR"
+    mkdir -p "$WORKDIR"
+    pushd "$WORKDIR" > /dev/null
+
+    git init -q
+    git config user.name "Anvil Test"
+    git config user.email "test@anvil.local"
+
+    # Run the seed script to create initial files
+    eval "$SEED_SCRIPT"
+
+    git add -A
+    git commit -q -m "seed: initial code"
+
+    echo "$PROMPT" > "$PROMPTFILE"
+
+    OPENBLAS_NUM_THREADS=1 timeout 300 aider \
+        --message-file "$PROMPTFILE" \
+        --yes-always \
+        --no-analytics \
+        --no-show-model-warnings \
+        --no-show-release-notes \
+        --no-check-update \
+        --no-browser \
+        --auto-lint \
+        --lint-cmd "python: anvil-review" \
+        --lint-cmd "javascript: anvil-review" \
+        --lint-cmd "typescript: anvil-review" \
+        --lint-cmd "go: anvil-review" \
+        --lint-cmd "rust: anvil-review" \
+        --model "$TEST_MODEL" \
+        --openai-api-base "$TEST_API_BASE" \
+        --openai-api-key "$TEST_API_KEY" \
+        < /dev/null > "$LOGFILE" 2>&1
+
+    AIDER_EXIT=$?
+
+    FILES=$(find . \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.go" -o -name "*.rs" \) -not -path "./.git/*" -not -path "./target/*" 2>/dev/null | sort)
+
+    REVIEW_COUNT=$(grep -c "Review" "$LOGFILE" 2>/dev/null || true)
+    APPROVED_COUNT=$(grep -c "APPROVED" "$LOGFILE" 2>/dev/null || true)
+    REJECTED_COUNT=$(grep -c "REJECTED" "$LOGFILE" 2>/dev/null || true)
+    FIX_COUNT=$(grep -c "Escalation" "$LOGFILE" 2>/dev/null || true)
+    FIXED_COUNT=$(grep -c "FIXED by" "$LOGFILE" 2>/dev/null || true)
+
+    REVIEW_COUNT="${REVIEW_COUNT:-0}"
+    APPROVED_COUNT="${APPROVED_COUNT:-0}"
+    REJECTED_COUNT="${REJECTED_COUNT:-0}"
+    FIX_COUNT="${FIX_COUNT:-0}"
+    FIXED_COUNT="${FIXED_COUNT:-0}"
+
+    TEST_RESULT="no tests"
+    TEST_OUTPUT=""
+    if compgen -G "test_*.py" > /dev/null 2>&1; then
+        TEST_OUTPUT=$(python3 -m pytest -x -q 2>&1)
+        TEST_EXIT=$?
+        TEST_RESULT=$([ $TEST_EXIT -eq 0 ] && echo "PASS" || echo "FAIL")
+    elif compgen -G "*.test.js" > /dev/null 2>&1; then
+        TEST_OUTPUT=$(node *.test.js 2>&1)
+        TEST_EXIT=$?
+        TEST_RESULT=$([ $TEST_EXIT -eq 0 ] && echo "PASS" || echo "FAIL")
+    elif compgen -G "*_test.go" > /dev/null 2>&1; then
+        [ ! -f "go.mod" ] && go mod init testmod 2>/dev/null
+        TEST_OUTPUT=$(go test -v 2>&1)
+        TEST_EXIT=$?
+        TEST_RESULT=$([ $TEST_EXIT -eq 0 ] && echo "PASS" || echo "FAIL")
+    fi
+
+    popd > /dev/null
+
+    echo "- Files: $(echo "$FILES" | tr '\n' ' ')" >> "$LOG"
+    echo "- Aider exit: $AIDER_EXIT" >> "$LOG"
+    echo "- Reviews: $REVIEW_COUNT (approved: $APPROVED_COUNT, rejected: $REJECTED_COUNT, escalations: $FIX_COUNT, fixed: $FIXED_COUNT)" >> "$LOG"
+    echo "- Tests: $TEST_RESULT" >> "$LOG"
+
+    if [ "$AIDER_EXIT" = "124" ] && [ "$TEST_RESULT" != "PASS" ]; then
+        echo "- ERROR: Timed out after 300s (no passing tests)" >> "$LOG"
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  $NUM. $NAME — timeout, no passing tests"
+    elif [ "$AIDER_EXIT" = "124" ] && [ "$TEST_RESULT" = "PASS" ]; then
+        echo "- WARNING: Timed out after 300s but tests passed" >> "$LOG"
+        PASS=$((PASS + 1))
+    elif grep -q "can't start new thread\|RuntimeError" "$LOGFILE" 2>/dev/null && [ -z "$FILES" ]; then
+        echo "- ERROR: Thread limit hit — run outside claude-code.slice" >> "$LOG"
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  $NUM. $NAME — thread exhaustion"
+    elif [ "$TEST_RESULT" = "FAIL" ]; then
+        echo "- Test output:" >> "$LOG"
+        echo '```' >> "$LOG"
+        echo "$TEST_OUTPUT" | tail -20 >> "$LOG"
+        echo '```' >> "$LOG"
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  $NUM. $NAME — tests failed"
+    elif [ "$REVIEW_COUNT" = "0" ]; then
+        echo "- WARNING: No review ran" >> "$LOG"
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  $NUM. $NAME — no review"
+    else
+        PASS=$((PASS + 1))
+    fi
+
+    if [ "$REJECTED_COUNT" != "0" ]; then
+        echo "- Rejection details:" >> "$LOG"
+        echo '```' >> "$LOG"
+        grep -A5 "REJECTED" "$LOGFILE" | head -30 >> "$LOG"
+        echo '```' >> "$LOG"
+    fi
+
+    echo "" >> "$LOG"
+    echo "  Reviews: $REVIEW_COUNT | Approved: $APPROVED_COUNT | Rejected: $REJECTED_COUNT | Escalations: $FIX_COUNT | Fixed: $FIXED_COUNT | Tests: $TEST_RESULT"
+    echo ""
+}
+
+# ── Test 15: Bug fix — broken function ──────────────────────────────────────
+run_test_with_seed 15 "Bug fix — broken binary search" \
+'cat > search.py << PYEOF
+def binary_search(arr, target):
+    low, high = 0, len(arr)
+    while low < high:
+        mid = (low + high) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            low = mid  # BUG: should be mid + 1, causes infinite loop
+        else:
+            high = mid
+    return -1
+PYEOF
+cat > test_search.py << PYEOF
+import pytest
+from search import binary_search
+
+def test_find_existing():
+    assert binary_search([1, 3, 5, 7, 9], 5) == 2
+
+def test_find_first():
+    assert binary_search([1, 3, 5, 7, 9], 1) == 0
+
+def test_find_last():
+    assert binary_search([1, 3, 5, 7, 9], 9) == 4
+
+def test_not_found():
+    assert binary_search([1, 3, 5, 7, 9], 4) == -1
+
+def test_empty():
+    assert binary_search([], 1) == -1
+
+def test_single_found():
+    assert binary_search([5], 5) == 0
+
+def test_single_not_found():
+    assert binary_search([5], 3) == -1
+PYEOF' \
+"The binary_search function in search.py has a bug that causes an infinite loop in some cases. Fix the bug. Do NOT rewrite the function from scratch — find and fix the specific line that is wrong. The existing tests in test_search.py must all pass after the fix."
+
+# ── Test 16: Refactor — extract class from module ───────────────────────────
+run_test_with_seed 16 "Refactor — extract class from monolith" \
+'cat > app.py << PYEOF
+users = {}
+next_id = 1
+
+def create_user(name, email):
+    global next_id
+    user = {"id": next_id, "name": name, "email": email, "active": True}
+    users[next_id] = user
+    next_id += 1
+    return user
+
+def get_user(user_id):
+    return users.get(user_id)
+
+def deactivate_user(user_id):
+    if user_id in users:
+        users[user_id]["active"] = False
+        return True
+    return False
+
+def list_active_users():
+    return [u for u in users.values() if u["active"]]
+
+def find_by_email(email):
+    for u in users.values():
+        if u["email"] == email:
+            return u
+    return None
+PYEOF
+cat > test_app.py << PYEOF
+from app import create_user, get_user, deactivate_user, list_active_users, find_by_email
+
+def setup_function():
+    import app
+    app.users.clear()
+    app.next_id = 1
+
+def test_create_user():
+    u = create_user("Alice", "alice@test.com")
+    assert u["name"] == "Alice"
+    assert u["id"] == 1
+
+def test_get_user():
+    u = create_user("Bob", "bob@test.com")
+    assert get_user(u["id"])["name"] == "Bob"
+
+def test_deactivate():
+    u = create_user("Carol", "carol@test.com")
+    assert deactivate_user(u["id"]) is True
+    assert get_user(u["id"])["active"] is False
+
+def test_list_active():
+    create_user("Dave", "dave@test.com")
+    u2 = create_user("Eve", "eve@test.com")
+    deactivate_user(u2["id"])
+    active = list_active_users()
+    assert len(active) == 1
+
+def test_find_by_email():
+    create_user("Frank", "frank@test.com")
+    assert find_by_email("frank@test.com")["name"] == "Frank"
+    assert find_by_email("nobody@test.com") is None
+PYEOF' \
+"Refactor app.py: extract the user management logic into a UserStore class in a new file userstore.py. The class should have methods: create(name, email), get(user_id), deactivate(user_id), list_active(), find_by_email(email). Then update app.py to import and use UserStore — keep the same module-level functions (create_user, get_user, etc.) so they delegate to a shared UserStore instance. All existing tests in test_app.py must still pass without modification."
+
+# ── Test 17: Multi-file — REST-style handler with storage ───────────────────
+run_test 17 "Multi-file — task manager with storage" \
+"Build a simple task manager across 3 files:
+
+1. storage.py — a TaskStorage class that stores tasks in a dict. Methods: add(title, description) returns task dict with auto-incrementing id and status='pending', get(task_id) returns task or None, update_status(task_id, status) returns True/False, list_all() returns list of all tasks, list_by_status(status) returns filtered list.
+
+2. handlers.py — functions that use TaskStorage: handle_create(storage, title, description) returns the new task, handle_complete(storage, task_id) sets status to 'done' and returns the task or None, handle_list(storage, status_filter=None) returns tasks optionally filtered.
+
+3. test_tasks.py — pytest tests using a fresh TaskStorage instance for each test: test create and retrieve, test complete changes status, test list all, test list by status filter, test complete nonexistent returns None, test multiple tasks get unique ids.
+
+The files must import from each other correctly. handlers.py imports TaskStorage from storage."
+
+# ── Test 18: Add feature to existing code ───────────────────────────────────
+run_test_with_seed 18 "Add feature — pagination to existing API" \
+'cat > api.py << PYEOF
+class ItemStore:
+    def __init__(self):
+        self.items = []
+        self.next_id = 1
+
+    def add(self, name, price):
+        item = {"id": self.next_id, "name": name, "price": price}
+        self.items.append(item)
+        self.next_id += 1
+        return item
+
+    def get(self, item_id):
+        for item in self.items:
+            if item["id"] == item_id:
+                return item
+        return None
+
+    def list_all(self):
+        return list(self.items)
+
+    def delete(self, item_id):
+        self.items = [i for i in self.items if i["id"] != item_id]
+PYEOF
+cat > test_api.py << PYEOF
+from api import ItemStore
+
+def test_add_and_get():
+    store = ItemStore()
+    item = store.add("Widget", 9.99)
+    assert store.get(item["id"])["name"] == "Widget"
+
+def test_list_all():
+    store = ItemStore()
+    store.add("A", 1.0)
+    store.add("B", 2.0)
+    assert len(store.list_all()) == 2
+
+def test_delete():
+    store = ItemStore()
+    item = store.add("C", 3.0)
+    store.delete(item["id"])
+    assert store.get(item["id"]) is None
+PYEOF' \
+"Add pagination to the ItemStore class in api.py. Add a new method list_page(page, page_size=10) that returns a dict with: 'items' (the slice of items for that page), 'page' (current page number), 'page_size', 'total_items', 'total_pages'. Page numbering starts at 1. If page is out of range, return empty items list but correct totals. Do NOT modify existing methods or break existing tests. Add new tests to test_api.py: test_pagination_first_page, test_pagination_second_page, test_pagination_out_of_range, test_pagination_exact_fit (25 items with page_size=5 gives 5 pages)."
+
+# ── Test 19: Bug fix — JavaScript async race condition ──────────────────────
+run_test_with_seed 19 "Bug fix — JavaScript async queue" \
+'cat > queue.js << JSEOF
+class AsyncQueue {
+    constructor(concurrency) {
+        this.concurrency = concurrency;
+        this.running = 0;
+        this.queue = [];
+    }
+
+    async add(fn) {
+        if (this.running < this.concurrency) {
+            this.running++;
+            try {
+                return await fn();
+            } finally {
+                this.running--;
+                this._next();
+            }
+        } else {
+            return new Promise((resolve, reject) => {
+                this.queue.push({ fn, resolve, reject });
+            });
+        }
+    }
+
+    _next() {
+        if (this.queue.length > 0) {
+            const { fn, resolve, reject } = this.queue.shift();
+            // BUG: not incrementing this.running before executing
+            fn().then(resolve).catch(reject).finally(() => {
+                this.running--;
+                this._next();
+            });
+        }
+    }
+}
+
+module.exports = AsyncQueue;
+JSEOF
+cat > queue.test.js << JSEOF
+const assert = require("assert");
+const AsyncQueue = require("./queue");
+
+async function runTests() {
+    // Test 1: respects concurrency limit
+    const q = new AsyncQueue(2);
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const task = () => new Promise(resolve => {
+        concurrent++;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        setTimeout(() => { concurrent--; resolve(); }, 50);
+    });
+
+    await Promise.all([q.add(task), q.add(task), q.add(task), q.add(task)]);
+    assert.strictEqual(maxConcurrent, 2, "Should never exceed concurrency of 2");
+
+    // Test 2: all tasks complete
+    const q2 = new AsyncQueue(1);
+    const results = [];
+    await Promise.all([
+        q2.add(() => { results.push(1); return Promise.resolve(); }),
+        q2.add(() => { results.push(2); return Promise.resolve(); }),
+        q2.add(() => { results.push(3); return Promise.resolve(); }),
+    ]);
+    assert.deepStrictEqual(results, [1, 2, 3], "All tasks should complete in order");
+
+    // Test 3: errors do not break the queue
+    const q3 = new AsyncQueue(1);
+    const r3 = [];
+    const p1 = q3.add(() => Promise.reject(new Error("fail"))).catch(() => r3.push("err"));
+    const p2 = q3.add(() => { r3.push("ok"); return Promise.resolve(); });
+    await Promise.all([p1, p2]);
+    assert.deepStrictEqual(r3, ["err", "ok"], "Queue should continue after error");
+
+    console.log("All tests passed");
+}
+
+runTests().catch(e => { console.error(e); process.exit(1); });
+JSEOF' \
+"The AsyncQueue in queue.js has a bug in _next(): it does not increment this.running before executing the queued task, so the concurrency limit is not enforced for queued tasks. Fix the _next() method so that this.running is incremented before calling fn(). Do NOT rewrite the class — fix only the _next() method. All tests in queue.test.js must pass."
+
+# ── Test 20: Multi-file Go — HTTP handler with middleware ───────────────────
+run_test 20 "Multi-file Go — HTTP handler with middleware" \
+"Build a Go HTTP server across 3 files in package main:
+
+1. middleware.go — a Logger middleware function: func Logger(next http.Handler) http.Handler that wraps a handler and records each request (method, path, status code, duration) into a slice accessible via GetLogs() []LogEntry. LogEntry struct has Method, Path string, Status int, Duration time.Duration. Use a package-level mutex-protected slice. Also add ClearLogs() for testing.
+
+2. handlers.go — two handlers: HealthHandler that returns 200 with body 'ok', and EchoHandler that returns 200 with the request URL path as the body.
+
+3. handlers_test.go — use httptest.NewRecorder and httptest.NewRequest. Test: health returns 200 and 'ok', echo returns the path, logger records the request with correct method and path, logger records status code, multiple requests accumulate logs. Call ClearLogs() in each test. Run with: go test -v"
+
+# ── Test 21: Large module — 150+ line Python implementation ─────────────────
+run_test 21 "Large module — Markdown parser" \
+"Create markdown.py (this will be a larger file, 100-150 lines). Implement a parse_markdown(text) function that converts a subset of Markdown to HTML:
+- # h1, ## h2, ### h3 headings
+- **bold** and *italic* inline formatting
+- Blank line separates paragraphs (wrap in <p> tags)
+- Lines starting with - become <ul><li> lists (consecutive - lines are one list)
+- Lines starting with 1. 2. etc become <ol><li> lists
+- Backtick \`code\` becomes <code>code</code>
+
+Create test_markdown.py with pytest tests:
+- test_heading_h1, test_heading_h2, test_heading_h3
+- test_bold, test_italic, test_inline_code
+- test_paragraph (two paragraphs separated by blank line)
+- test_unordered_list (3 items)
+- test_ordered_list (3 items)
+- test_mixed_content (heading + paragraph + list in one document)
+- test_bold_inside_paragraph
+- test_empty_input returns empty string"
+
+# ── Test 22: Refactor — split and add tests to untested code ────────────────
+run_test_with_seed 22 "Refactor — add tests to untested config parser" \
+'cat > config.py << PYEOF
+import os
+
+def load_config(filepath):
+    config = {}
+    if not os.path.exists(filepath):
+        return config
+    with open(filepath) as f:
+        section = None
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1]
+                config[section] = {}
+            elif "=" in line and section:
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if value.lower() in ("true", "false"):
+                    value = value.lower() == "true"
+                elif value.isdigit():
+                    value = int(value)
+                config[section][key] = value
+    return config
+
+def get_nested(config, path, default=None):
+    parts = path.split(".")
+    current = config
+    for part in parts:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return default
+    return current
+
+def merge_configs(base, override):
+    result = {}
+    for key in set(list(base.keys()) + list(override.keys())):
+        if key in base and key in override:
+            if isinstance(base[key], dict) and isinstance(override[key], dict):
+                result[key] = merge_configs(base[key], override[key])
+            else:
+                result[key] = override[key]
+        elif key in base:
+            result[key] = base[key]
+        else:
+            result[key] = override[key]
+    return result
+PYEOF' \
+"The config.py file has three functions but no tests. Write test_config.py with comprehensive pytest tests:
+- test_load_config_basic: write a temp .ini-style file with 2 sections and verify parsing
+- test_load_config_type_conversion: verify booleans and integers are converted
+- test_load_config_comments_and_blanks: verify # comments and blank lines are skipped
+- test_load_config_missing_file: verify returns empty dict
+- test_get_nested_found: test dotted path lookup
+- test_get_nested_missing: test default value returned
+- test_get_nested_deep: test 3-level path
+- test_merge_simple: two flat configs
+- test_merge_override: override replaces base value
+- test_merge_nested: deep merge of nested dicts
+Use tmp_path fixture for creating temp config files. Do NOT modify config.py."
+
+# ── Test 23: Multi-file JavaScript — event-driven pipeline ──────────────────
+run_test 23 "Multi-file JavaScript — data pipeline" \
+"Build a data processing pipeline across 3 files:
+
+1. transform.js — export functions: uppercase(str) returns uppercased string, trimFields(obj) returns new object with all string values trimmed, addTimestamp(obj) returns new object with a 'processed_at' field set to Date.now().
+
+2. pipeline.js — export a Pipeline class. Constructor takes no args. Methods: use(fn) adds a transform function and returns this (chainable), run(data) applies all transforms in order to the data and returns the result, runBatch(array) applies the pipeline to each item and returns array of results.
+
+3. pipeline.test.js — using Node assert module: test single transform, test chained transforms, test runBatch processes all items, test pipeline is reusable (run twice gives same results), test empty pipeline returns data unchanged. process.exit(1) on failure."
+
+# ── Test 24: Bug fix + feature — Python with deliberate traps ──────────────
+run_test_with_seed 24 "Bug fix + feature — fix mutable default and add caching" \
+'cat > cache.py << PYEOF
+class Cache:
+    def __init__(self, max_size=100, default_ttl=60, stats=[]):
+        self.max_size = max_size
+        self.default_ttl = default_ttl
+        self.stats = stats  # BUG: mutable default argument shared between instances
+        self.store = {}
+
+    def get(self, key):
+        if key in self.store:
+            self.stats.append(("hit", key))
+            return self.store[key]
+        self.stats.append(("miss", key))
+        return None
+
+    def put(self, key, value):
+        if len(self.store) >= self.max_size:
+            oldest = next(iter(self.store))
+            del self.store[oldest]
+        self.store[key] = value
+
+    def get_stats(self):
+        return {"hits": sum(1 for s in self.stats if s[0] == "hit"),
+                "misses": sum(1 for s in self.stats if s[0] == "miss")}
+PYEOF
+cat > test_cache.py << PYEOF
+from cache import Cache
+
+def test_put_and_get():
+    c = Cache()
+    c.put("a", 1)
+    assert c.get("a") == 1
+
+def test_miss():
+    c = Cache()
+    assert c.get("x") is None
+
+def test_eviction():
+    c = Cache(max_size=2)
+    c.put("a", 1)
+    c.put("b", 2)
+    c.put("c", 3)
+    assert c.get("a") is None
+    assert c.get("c") == 3
+
+def test_stats_isolation():
+    """Each Cache instance should have its own stats list."""
+    c1 = Cache()
+    c2 = Cache()
+    c1.get("x")
+    assert c2.get_stats()["misses"] == 0, "c2 should not see c1 stats"
+
+def test_stats_counting():
+    c = Cache()
+    c.put("a", 1)
+    c.get("a")
+    c.get("b")
+    stats = c.get_stats()
+    assert stats["hits"] == 1
+    assert stats["misses"] == 1
+PYEOF' \
+"There are two things to do in cache.py:
+
+1. FIX THE BUG: The stats parameter has a mutable default argument (stats=[]). This means all Cache instances share the same stats list. Fix it so each instance gets its own list. The test_stats_isolation test must pass.
+
+2. ADD FEATURE: Add a get_or_set(key, factory_fn) method that returns the cached value if it exists, otherwise calls factory_fn() to compute it, stores the result, and returns it. Add these tests to test_cache.py:
+- test_get_or_set_miss: factory is called, value is stored and returned
+- test_get_or_set_hit: factory is NOT called when key exists
+- test_get_or_set_stats: a miss then a hit are recorded correctly
+
+All existing tests plus the new ones must pass."
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo "========================================" >> "$LOG"
